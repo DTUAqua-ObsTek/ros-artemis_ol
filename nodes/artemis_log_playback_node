@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+from artemis_ol.interface import LoggerReader
+from pathlib import Path
+from csv import DictReader, reader
+import numpy as np
+from sensor_msgs.msg import Imu, MagneticField
+import rospy
+from geometry_msgs.msg import Vector3
+
+
+if __name__=="__main__":
+    rospy.init_node("artemis_log_playback")
+    log_file = Path(rospy.get_param("~log_file")).resolve(True)
+    if log_file.suffix != ".csv":
+        raise ValueError("Log file is not a .csv.")
+    rospy.loginfo(f"Publishing raw data from {log_file}")
+    imu_msg = Imu()
+    imu_msg.header.frame_id = "imu_link_ned"
+    mag_msg = MagneticField()
+    mag_msg.header.frame_id = "imu_link_ned"
+    imu_msg.orientation_covariance = [-1.] + [0.] * 8
+    linear_acceleration_stddev = rospy.get_param("~linear_acceleration_stddev", 0.0)
+    imu_msg.linear_acceleration_covariance = [linear_acceleration_stddev ** 2, 0., 0., 0., linear_acceleration_stddev ** 2, 0., 0., 0., linear_acceleration_stddev ** 2]
+    angular_velocity_stddev = rospy.get_param("~angular_velocity_stddev", 0.0)
+    imu_msg.angular_velocity_covariance = [angular_velocity_stddev ** 2, 0., 0., 0., angular_velocity_stddev ** 2, 0., 0., 0., angular_velocity_stddev ** 2]
+    magnetic_field_stddev = rospy.get_param("~magnetic_field_stddev", 0.0)
+    mag_msg.magnetic_field_covariance = [magnetic_field_stddev ** 2, 0., 0., 0., magnetic_field_stddev ** 2, 0., 0., 0., magnetic_field_stddev ** 2]
+    imu_pub = rospy.Publisher("imu/data_raw", Imu, queue_size=10)
+    mag_pub = rospy.Publisher("imu/mag", MagneticField, queue_size=10)
+    rate = rospy.Rate(rospy.get_param("~frequency", 100.0))
+    
+    with open(log_file, "r", newline="") as f:
+        try:
+            csvreader = reader(f)
+            for line in csvreader:
+                line = ",".join(line[2:])
+                if rospy.is_shutdown():
+                    break
+                data = LoggerReader.parse_log_msg(line)
+                if data is None:
+                    continue
+                imu_msg.header.stamp = rospy.Time.now()
+                mag_msg.header.stamp = imu_msg.header.stamp
+                imu_msg.linear_acceleration = Vector3(*[data[key] / 1000.0 * 9.80865 for key in ("ax", "ay", "az")])
+                imu_msg.angular_velocity = Vector3(*[data[key] * np.pi / 180.0 for key in ("wx", "wy", "wz")])
+                mag_msg.magnetic_field = Vector3(*[data[key] * 1e-6 for key in ("mx", "my", "mz")])
+                imu_pub.publish(imu_msg)
+                mag_pub.publish(mag_msg)
+                rate.sleep()
+        except rospy.ROSInterruptException:
+            pass
