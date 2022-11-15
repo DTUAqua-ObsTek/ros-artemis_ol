@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from artemis_ol.interface import LoggerReader
 from pathlib import Path
-from csv import DictReader, reader
+from csv import reader
 import numpy as np
 from sensor_msgs.msg import Imu, MagneticField
 import rospy
