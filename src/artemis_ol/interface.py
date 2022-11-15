@@ -14,9 +14,9 @@ import contextlib
 import re
 
 
-LOOPTIME_MS = 10e-6
-YEARMONTHDAY = re.compile("%d%d%d%d/%d%d/%d%d")
-DAYMONTHYEAR = re.compile("%d%d/%d%d/%d%d%d%d")
+LOOPTIME_MS = 100e-6
+YEARMONTHDAY = re.compile("^\d{4}/\d{2}/\d{2}$")
+DAYMONTHYEAR = re.compile("^\d{2}/\d{2}/\d{4}$")
 
 
 def find_logger(vendor_id: Union[str, int], product_id: Union[str, int]) ->  Union[None, serial.tools.list_ports_linux.SysFS]:
@@ -76,7 +76,7 @@ class LoggerManager(serial.Serial):
     
     def config(self):
         self.send("h\n")
-        time.sleep(1e-1)
+        time.sleep(3)
         self.send("h\n")
 
     def start(self):
@@ -128,9 +128,10 @@ class LoggerManager(serial.Serial):
             datestring = "{}T{}{}{}.{:<06d}".format(date, h, m, s, ms)
             if YEARMONTHDAY.match(date):
                 timestamp = dt.datetime.strptime(datestring, "%Y/%m/%dT%H%M%S.%f")
-            else:
+            elif DAYMONTHYEAR.match(date):
                 timestamp = dt.datetime.strptime(datestring, "%d/%m/%YT%H%M%S.%f")
-            # timestamp = dt.datetime.strptime(datestring, "%Y/%m/%dT%H%M%S.%f")
+            else:
+                raise ValueError(f"Invalid date {date}.")
             imu_raw = {key: float(data.get(key)) for key in imu_keys if data.get(key) is not None}
             imu_raw.update({"timestamp": timestamp})
             return imu_raw
@@ -161,8 +162,8 @@ class LoggerManager(serial.Serial):
                     msg = "Serial Timeout."
                 except UnicodeDecodeError:
                     msg = "Decode error"
-                except ValueError:
-                    msg = "Value parse error."
+                except ValueError as e:
+                    msg = f"Value parse error. {e} {parsed} {self._headers}"
                 except KeyError as e:
                     msg = f"Key error. {e} {parsed}, {self._headers}"
                 finally:
