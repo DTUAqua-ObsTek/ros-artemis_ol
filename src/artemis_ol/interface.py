@@ -14,7 +14,7 @@ import contextlib
 import re
 
 
-LOOPTIME_MS = 100e-6
+LOOPTIME_MS = 10e-6
 YEARMONTHDAY = re.compile("^\d{4}/\d{2}/\d{2}$")
 DAYMONTHYEAR = re.compile("^\d{2}/\d{2}/\d{4}$")
 
@@ -55,37 +55,65 @@ def nonblocking(lock):
 
 class LoggerManager(serial.Serial):
     def __init__(self, vid: str="0x1a86", pid: str="0x7523", port: str=None, baudrate: int=115200, timeout: float=1.0, queue_size: int=None, log: bool=False):
+        serial.Serial.__init__(self)  # init the serial object
+        self._serial_lock = threading.Lock()  # init the serial lock
+        self._headers = None  # We don't know what data the artemis logger is providing
+        self._log_flag = log  # Set to send logs
+        self._run_flag = False  # Flag to run the read/write threads
+        self._in_buffer = deque(maxlen=queue_size)  # Buffer for received data from artemis
+        self._out_buffer = deque(maxlen=queue_size)  # buffer to send data to artemis
+        self._pid = pid  # product id of artemis
+        self._vid = vid  # vendor id of artemis
+        # Set the port of the serial
         if port is None:
-            device = None
-            if log:
-                    logging.info(f"Waiting for OL Artemis device connection {vid}:{pid}.")
-            while device is None:
-                device = find_logger(vid, pid)
-                time.sleep(LOOPTIME_MS)
-            logging.info(f"Connected to OL Artemis device.")
-            port = device.device
-        self._headers = None
-        self._serial_lock = threading.Lock()
-        self._log_flag = log
-        self._run_flag = False
-        self._in_buffer = deque(maxlen=queue_size)
-        self._out_buffer = deque(maxlen=queue_size)
-        self._read_thread = threading.Thread(target=self._read_serial)
-        self._write_thread = threading.Thread(target=self._write_serial)
-        serial.Serial.__init__(self, port, baudrate, timeout=timeout)
+            self.port = self._get_port()  # try to find the vid:pid on the USB bus
+        else:
+            self.port = port
+        self.baudrate = baudrate  # set the baudrate
+        self.timeout = timeout  # set the timeout (used for readline method)
+        self._disconnect_flag = True  # flag to indicate if the serial is current disconnected
+        self.serial_connect()  # Connect to the serial device
+        self._read_thread = threading.Thread(target=self._read_serial)  # Read thread
+        self._write_thread = threading.Thread(target=self._write_serial)  # Write thread
     
+    def _get_port(self) -> str:
+        device = None
+        if self._log_flag:
+            logging.info(f"Waiting for OL Artemis device connection {self._vid}:{self._pid}.")
+        while device is None:
+            device = find_logger(self._vid, self._pid)
+            time.sleep(LOOPTIME_MS)
+        logging.info(f"Connected to OL Artemis device.")
+        return device.device
+
+    def serial_connect(self):
+        while self._disconnect_flag:
+            try:
+                if self._serial_lock.acquire(False):
+                    if self.isOpen():
+                        self.close()
+                    self.port = self._get_port()
+                    self.open()
+                    self._disconnect_flag = False
+            except serial.SerialException:
+                time.sleep(LOOPTIME_MS)
+            finally:
+                self._serial_lock.release()
+
     def config(self):
+        time.sleep(5)
+        self.send("\n")
+        time.sleep(5)
         self.send("h\n")
-        time.sleep(3)
-        self.send("h\n")
+        time.sleep(5)
 
     def start(self):
         if self._run_flag:
             if self._log_flag:
-                logging.warn(f"Manager already started.")
+                logging.warning("Manager already started.")
         else:
             if self._log_flag:
-                logging.info(f"Starting manager.")
+                logging.info("Starting manager.")
             self._run_flag = True
             self._read_thread.start()
             self._write_thread.start()
@@ -94,10 +122,10 @@ class LoggerManager(serial.Serial):
     def stop(self):
         if not self._run_flag:
             if self._log_flag:
-                logging.warn(f"Manager already stopped.")
+                logging.warning("Manager already stopped.")
         else:
             if self._log_flag:
-                logging.info(f"Stopping manager.")
+                logging.info("Stopping manager.")
             self._run_flag = False
 
     def join(self):
@@ -143,21 +171,35 @@ class LoggerManager(serial.Serial):
             raise AttributeError(f"Logger Manager.parse_data {e}, {data}")
 
     def _read_serial(self):
+        # Thread spin
         while self._run_flag:
+            msg = None
+            parsed = None
+            # acquire access to serial object
             if self._serial_lock.acquire(False):
                 try:
-                    line_bytes = self.readline()
-                    line = line_bytes.decode(encoding="utf-8").rstrip()
-                    parsed = LoggerManager.parse_headers(line)
+                    line_bytes = self.readline()  # Read a line of data
+                    line = line_bytes.decode(encoding="utf-8").rstrip()  # Convert to a string
+                    parsed = LoggerManager.parse_headers(line)  # Check for headers
+                    # Update the headers variable if a header line has been detected
                     if isinstance(parsed, dict):
                         if self._log_flag:
                             logging.info(f"Update to headers: {parsed['headers']}")
                         self._headers = parsed["headers"]
+                    # Otherwise the data is probably a log update
                     elif self._headers is not None:
                         data = LoggerManager.parse_data(parsed, self._headers)
                         if data is not None:
                             self._in_buffer.append(data)
-                    msg = None
+                # If there was an issue with the serial device (eg. disconnect)
+                except serial.SerialException:
+                    # If the disconnect flag has not been raised
+                    if not self._disconnect_flag:
+                        self._disconnect_flag = True  # Raise the flag
+                        self._serial_lock.release()  # Release access to the serial
+                        self.serial_connect()  # Try reconnecting to the serial
+                        time.sleep(LOOPTIME_MS)
+                        continue  # Try again
                 except TimeoutError:
                     msg = "Serial Timeout."
                 except UnicodeDecodeError:
@@ -174,20 +216,35 @@ class LoggerManager(serial.Serial):
             time.sleep(LOOPTIME_MS)
     
     def _write_serial(self):
+        # Outer thread spin
         while self._run_flag:
+            # Try lock access to serial
             if self._serial_lock.acquire(False):
+                # If there is data to send
                 if len(self._out_buffer):
                     packet = self._out_buffer.pop()
                     if isinstance(packet, str):
                         packet = packet.encode("utf-8")
-                    self.write(packet)
+                    # Try writing data to serial
+                    try:
+                        self.write(packet)
+                    except serial.SerialException:
+                        # If the disconnect flag has not been raised
+                        if not self._disconnect_flag:
+                            self._disconnect_flag = True
+                            self._serial_lock.release()
+                            self.serial_connect()
+                            time.sleep(LOOPTIME_MS)
+                            continue
                 self._serial_lock.release()
             time.sleep(LOOPTIME_MS)
 
     def send(self, in_bytes: Union[bytes, str]):
         self._out_buffer.append(in_bytes)
 
-    def __next__(self) -> Union[None, dict]:
+    def __next__(self) -> Union[None, dict, int]:
+        if self._disconnect_flag:
+            return -1
         if len(self._in_buffer):
             return self._in_buffer.pop()
             
@@ -274,7 +331,7 @@ def main():
         format='[%(asctime)s.%(msecs)03d %(levelname)s]\t%(message)s', datefmt="%y%m%dT%H%M%S")
     log_flag = args.logger_output != "off"
     try:
-        sh = LoggerReader(args.vid, args.pid, args.port, args.baudrate, log=log_flag, queue_size=30)
+        #sh = LoggerReader(args.vid, args.pid, args.port, args.baudrate, log=log_flag, queue_size=30)
         sh = LoggerManager(args.vid, args.pid, args.port, args.baudrate, log=log_flag, queue_size=30)
         sh.start()
         log_last = time.perf_counter()
