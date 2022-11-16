@@ -142,7 +142,9 @@ class LoggerManager(serial.Serial):
 
     @staticmethod
     def parse_data(raw_data: Tuple[str], headers: Tuple[str, None]) -> Union[dict, None]:
-        imu_keys = ("ax", "ay", "az", "gx", "gy", "gz", "mx", "my", "mz", "rawax", "raway", "rawaz", "rawgx", "rawgy", "rawgz", "rawmx", "rawmy", "rawmz")
+        imu_keys = (
+        "ax", "ay", "az", "gx", "gy", "gz", "mx", "my", "mz", "rawax", "raway", "rawaz", "rawgx", "rawgy", "rawgz",
+        "rawmx", "rawmy", "rawmz", "depth_m", "mbar", "alt_m", "degc")
         data = {header.lower(): packet for packet, header in zip(raw_data, headers)}
         try:
             date = data["rtcdate"]
