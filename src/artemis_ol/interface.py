@@ -13,13 +13,13 @@ import time
 import contextlib
 import re
 
-
 LOOPTIME_MS = 10e-6
 YEARMONTHDAY = re.compile("^\d{4}/\d{2}/\d{2}$")
 DAYMONTHYEAR = re.compile("^\d{2}/\d{2}/\d{4}$")
 
 
-def find_logger(vendor_id: Union[str, int], product_id: Union[str, int]) ->  Union[None, serial.tools.list_ports_linux.SysFS]:
+def find_logger(vendor_id: Union[str, int], product_id: Union[str, int]) -> Union[
+    None, serial.tools.list_ports_linux.SysFS]:
     if not isinstance(vendor_id, (int, str)):
         raise ValueError("vendor_id must be a hex string or an integer.")
     if not isinstance(product_id, (int, str)):
@@ -54,7 +54,8 @@ def nonblocking(lock):
 
 
 class LoggerManager(serial.Serial):
-    def __init__(self, vid: str="0x1a86", pid: str="0x7523", port: str=None, baudrate: int=115200, timeout: float=1.0, queue_size: int=None, log: bool=False):
+    def __init__(self, vid: str = "0x1a86", pid: str = "0x7523", port: str = None, baudrate: int = 115200,
+                 timeout: float = 1.0, queue_size: int = None, log: bool = False):
         serial.Serial.__init__(self)  # init the serial object
         self._serial_lock = threading.Lock()  # init the serial lock
         self._headers = None  # We don't know what data the artemis logger is providing
@@ -75,7 +76,7 @@ class LoggerManager(serial.Serial):
         self.serial_connect()  # Connect to the serial device
         self._read_thread = threading.Thread(target=self._read_serial)  # Read thread
         self._write_thread = threading.Thread(target=self._write_serial)  # Write thread
-    
+
     def _get_port(self) -> str:
         device = None
         if self._log_flag:
@@ -214,7 +215,7 @@ class LoggerManager(serial.Serial):
                             logging.debug(msg)
                 self._serial_lock.release()
             time.sleep(LOOPTIME_MS)
-    
+
     def _write_serial(self):
         # Outer thread spin
         while self._run_flag:
@@ -247,10 +248,11 @@ class LoggerManager(serial.Serial):
             return -1
         if len(self._in_buffer):
             return self._in_buffer.pop()
-            
+
 
 class LoggerReader(threading.Thread, serial.Serial):
-    def __init__(self, vid: str="0x1a86", pid: str="0x7523", port: str=None, baudrate: int=115200, timeout: float=1.0, queue_size: int=None, log: bool=False):
+    def __init__(self, vid: str = "0x1a86", pid: str = "0x7523", port: str = None, baudrate: int = 115200,
+                 timeout: float = 1.0, queue_size: int = None, log: bool = False):
         if port is None:
             device = find_logger(vid, pid)
             if device is None:
@@ -281,8 +283,8 @@ class LoggerReader(threading.Thread, serial.Serial):
         else:
             timestamp = dt.datetime.strptime(datestring, "%d/%m/%YT%H%M%S.%f")
         return dict(ax=imu_data[0], ay=imu_data[1], az=imu_data[2],
-        wx=imu_data[3], wy=imu_data[4], wz=imu_data[5],
-        mx=imu_data[6], my=-imu_data[7], mz=-imu_data[8], ts=timestamp)
+                    wx=imu_data[3], wy=imu_data[4], wz=imu_data[5],
+                    mx=imu_data[6], my=-imu_data[7], mz=-imu_data[8], ts=timestamp)
 
     def stop(self):
         if self._run_flag:
@@ -316,22 +318,25 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--vid", type=str, default="0x1a86", help="Logger vendor id.")
     ap.add_argument("--pid", type=str, default="0x7523", help="Logger product id.")
-    ap.add_argument("-p", "--port", type=str, default=None, help="Logger device path. Use if program cannot find the vendor:product id.")
+    ap.add_argument("-p", "--port", type=str, default=None,
+                    help="Logger device path. Use if program cannot find the vendor:product id.")
     ap.add_argument("-b", "--baudrate", type=int, default=115200, help="Logger device baudrate.")
-    ap.add_argument("-l", "--logger_output", type=str, default="off", choices=["off", "screen", "log"], help="Choose to log messages to screen or file.")
-    ap.add_argument("--log_level", type=str, default="info", choices=["debug", "info", "warn", "error", "fatal"], help="Logger level.")
+    ap.add_argument("-l", "--logger_output", type=str, default="off", choices=["off", "screen", "log"],
+                    help="Choose to log messages to screen or file.")
+    ap.add_argument("--log_level", type=str, default="info", choices=["debug", "info", "warn", "error", "fatal"],
+                    help="Logger level.")
     args = ap.parse_args()
     loglevel = getattr(logging, args.log_level.upper())
     filename = dt.datetime.utcnow().strftime("%y%m%dT%H%M%S.%f_artemis_ol.log")
     if args.logger_output == "log":
         logging.basicConfig(filename=filename, level=loglevel,
-        format='[%(asctime)s.%(msecs)03d %(levelname)s]\t%(message)s', datefmt="%y%m%dT%H%M%S")
+                            format='[%(asctime)s.%(msecs)03d %(levelname)s]\t%(message)s', datefmt="%y%m%dT%H%M%S")
     else:
         logging.basicConfig(level=loglevel,
-        format='[%(asctime)s.%(msecs)03d %(levelname)s]\t%(message)s', datefmt="%y%m%dT%H%M%S")
+                            format='[%(asctime)s.%(msecs)03d %(levelname)s]\t%(message)s', datefmt="%y%m%dT%H%M%S")
     log_flag = args.logger_output != "off"
     try:
-        #sh = LoggerReader(args.vid, args.pid, args.port, args.baudrate, log=log_flag, queue_size=30)
+        # sh = LoggerReader(args.vid, args.pid, args.port, args.baudrate, log=log_flag, queue_size=30)
         sh = LoggerManager(args.vid, args.pid, args.port, args.baudrate, log=log_flag, queue_size=30)
         sh.start()
         log_last = time.perf_counter()
@@ -357,5 +362,5 @@ def main():
         logging.info("Finished!")
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
