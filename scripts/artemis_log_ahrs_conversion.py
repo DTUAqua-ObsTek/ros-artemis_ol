@@ -116,16 +116,37 @@ if __name__=="__main__":
             ekf = EKF(angular_velocity, acceleration, frequency=args.frequency, var_gyr=args.sigma_g, var_acc=args.sigma_a, frame="ENU")
         print(f"Filtering done.")
         quat = ekf.Q
-        R = Rotation.from_quat(ekf.Q[:, [1, 2, 3, 0]])
-        euler = R.as_euler("xyz", degrees=True)
-        rpy = np.array(rpy)
+
+        # Compose Rotation from Stabilized ESD frame to Camera Frame
+
+        # First rotation from ESD frame to ENU frame
+        Rsn = Rotation.from_euler("xyz", [180, 0, 0], degrees=True)
+
+        # Second rotation from ENU frame to IMU frame
+        Rni = Rotation.from_quat(ekf.Q[:, [1, 2, 3, 0]])
+
+        # Third roration from IMU frame to camera frame
+        Ric = Rotation.from_euler("xyz", [180, 0, 0], degrees=True)
+
+        # Compose stabilize frame to camera frame
+        Rsc = Ric * (Rni * Rsn)
+
+        # Inverse frame
+        Rcs = Rsc.inv()
+
+        # Stabilization euler rotations must use the extrinsic form
+        alpha, beta, gamma = Rcs.as_euler("xyz", degrees=True).T
+
+        euler = Ric.as_euler("xyz", degrees=True)  # ENU - IMU rotation
+        rpy = np.array(rpy)  # Original rotation
         # rpy is in N-WU, I will not defend this...
         rpy[:, 1] = -rpy[:, 1]
+
         # Rotate to ENU
-        R = Rotation.from_euler("xyz", (0,0,-90), degrees=True)
+        R = Rotation.from_euler("xyz", (0, 0, -90), degrees=True)
         rpy = R.apply(rpy)
         if args.plot:
-            fig, ax = plt.subplots(4, 1)
+            fig, ax = plt.subplots(5, 1)
             ax[0].plot(acceleration)
             ax[0].set_ylabel("acc (m/s/s)")
             ax[1].plot(angular_velocity)
@@ -138,9 +159,13 @@ if __name__=="__main__":
             for i, e in enumerate(rpy.T):
                 ax[3].plot(e, colors[i]+"--")
             ax[3].set_ylabel("eul (deg)")
+            for i, e in enumerate(R_inv.as_euler("XYZ", degrees=True).T):
+                ax[4].plot(e, colors[i])
+            ax[4].set_ylabel("alpha, beta, gamma (deg)")
             plt.show()
         out_path = log_file.with_name(log_file.stem + "_ekf_ori_est" + log_file.suffix)
         data = pd.read_csv(log_file)
+        data["alpha"], data["beta"], data["gamma"] = alpha, beta, gamma
         data["Roll"], data["Pitch"], data["Yaw"] = euler.T
         data["Qw"], data["Qx"], data["Qy"], data["Qz"] = quat.T
         print(f"Writing Roll, Pitch, Yaw Data to {out_path}.")
